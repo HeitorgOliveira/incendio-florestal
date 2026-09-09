@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <omp.h>
 
 // Da para otimizar o tamanho das variaveis, da para mudar o approach das matrizes para nao precisar copiar, utilizar arrays separados eh
 // melhor pensando em cache e em SIMD
@@ -221,6 +222,8 @@ int main(int argc, char* argv[]) {
 
     celulas_intactas = celulas_combustiveis_inicial;
     int tempo_atual = 0;
+
+    double tempo_inicial = omp_get_wtime();
     while(tempo_atual < PASSOS && celulas_em_chamas) {
         int qnt_ignicoes = 0;
         for(int i = 0; i < LINHA; i++) {
@@ -281,6 +284,7 @@ int main(int argc, char* argv[]) {
         }
         tempo_atual++;
     }
+    double tempo_final = omp_get_wtime();
 
     percentual_queimado = 100 * ((celulas_queimadas + celulas_em_chamas)/(float)celulas_combustiveis_inicial);
     percentual_protegido = 100 * (celulas_de_contencao/(float)celulas_combustiveis_inicial);
@@ -292,8 +296,8 @@ int main(int argc, char* argv[]) {
     }
 
     printf("passos: %d\nnao_combustiveis: %d\nintactas: %d\nem_chamas: %d\nqueimadas: %d\ncontencao: %d\ntotal_ignicoes: %d\npico_ignicoes: %d\npercentual_queimado:\
- %d\npercentual_protegido: %d\nchecksum: %llu\ntempo: 0", tempo_atual, celulas_n_combustiveis, celulas_intactas, celulas_em_chamas, celulas_queimadas,\
-              celulas_de_contencao, total_ignicoes, qnt_ignicoes_passo_maior, percentual_queimado, percentual_protegido, checksum);
+ %d\npercentual_protegido: %d\nchecksum: %llu\ntempo: %f", tempo_atual, celulas_n_combustiveis, celulas_intactas, celulas_em_chamas, celulas_queimadas,\
+              celulas_de_contencao, total_ignicoes, qnt_ignicoes_passo_maior, percentual_queimado, percentual_protegido, checksum, tempo_final - tempo_inicial);
 
     free(estado_atual);
     free(prox_estado);
