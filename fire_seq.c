@@ -63,14 +63,16 @@ typedef struct celula {
 
 
 // VARIAVEIS
-int LINHA, COLUNA, PASSOS, THREADS, SEED, LIMIAR; // HEADER; threads eh inutil nessa versão
+unsigned int SEED;
+int LINHA, COLUNA, PASSOS, THREADS, LIMIAR; // HEADER; threads eh inutil nessa versão
 int VENTO_LINHA, VENTO_COLUNA, INTENSIDADE;// VENTO; 
 int N_FOCOS, N_ZONAS;
 
 celula *estado_atual, *prox_estado; // matrizes
 int celulas_n_combustiveis = 0, celulas_intactas = 0, celulas_em_chamas = 0, celulas_queimadas = 0, celulas_de_contencao = 0;
-int total_ignicoes = 0, passo_com_maior_numero_de_ignicoes = 0, qnt_ignicoes_passo_maior = 0, percentual_queimado = 0;
-int percentual_protegido = 0, celulas_combustiveis_inicial = 0;
+int total_ignicoes = 0, passo_com_maior_numero_de_ignicoes = -1, qnt_ignicoes_passo_maior = 0, celulas_combustiveis_inicial = 0;
+double percentual_queimado = 0, percentual_protegido = 0;
+
 
 // FUNCOES
 
@@ -97,26 +99,24 @@ void iniciar_matrizes(celula **matriz) {
             (*matriz)[indice].cb = avaliar_valor(rand_r(&SEED) % 100);
             (*matriz)[indice].umidade = rand_r(&SEED) % 101;
             (*matriz)[indice].tempo_ativacao = -1;
+            (*matriz)[indice].tq = TEMPO_NULO;
 
             switch ((*matriz)[indice].cb) {
                 case VEGETACAO_RASTEIRA:
                     (*matriz)[indice].fator = FATOR_VEGETACAO;
                     (*matriz)[indice].es = INTACTA;
-                    (*matriz)[indice].tq = TEMPO_VEGETACAO;
                     celulas_combustiveis_inicial++;
                     break;
 
                 case FLORESTA:
                     (*matriz)[indice].fator = FATOR_FLORESTA;
                     (*matriz)[indice].es = INTACTA;
-                    (*matriz)[indice].tq = TEMPO_FLORESTA;
                     celulas_combustiveis_inicial++;
                     break;
 
                 default:
                     (*matriz)[indice].fator = FATOR_NULO;
                     (*matriz)[indice].es = NAO_COMBUSTIVEL;
-                    (*matriz)[indice].tq = TEMPO_NULO;
                     celulas_n_combustiveis++;
             }
         }
@@ -138,8 +138,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    fscanf(fp, " %d %d %d %d %d %d", &LINHA, &COLUNA, &PASSOS, &THREADS, &SEED, &LIMIAR); // Leitura Header
-    if (!(verifica_gt_0(LINHA) && verifica_gt_0(COLUNA) && verifica_gt_0(PASSOS) && verifica_gt_0(THREADS) && verifica_gt_0(SEED) && verifica_gt_0(LIMIAR))) {
+    fscanf(fp, " %d %d %d %d %u %d", &LINHA, &COLUNA, &PASSOS, &THREADS, &SEED, &LIMIAR); // Leitura Header
+    if (!(verifica_gt_0(LINHA) && verifica_gt_0(COLUNA) && verifica_gte_0(PASSOS) && verifica_gt_0(THREADS) && verifica_gt_0(LIMIAR))) {
         fprintf(stderr, "Os parâmetros do header devem ser maiores do que 0");
         return 1;
     }
@@ -188,6 +188,8 @@ int main(int argc, char* argv[]) {
         }
         estado_atual[indice].es = EM_CHAMAS;
         prox_estado[indice].es = EM_CHAMAS;
+        estado_atual[indice].tq = estado_atual[indice].cb == VEGETACAO_RASTEIRA ? TEMPO_VEGETACAO : TEMPO_FLORESTA;
+        prox_estado[indice].tq = estado_atual[indice].tq;
         celulas_em_chamas++;
     }
     
@@ -210,7 +212,7 @@ int main(int argc, char* argv[]) {
         for(int i = linhaIZ; i <= linhaFZ; i++) {
             for(int j = colunaIZ; j <= colunaFZ; j++) {
                 int indice = (i * COLUNA) + j;
-                if (estado_atual[indice].tempo_ativacao == -1) {
+                if (estado_atual[indice].tempo_ativacao == -1 || estado_atual[indice].tempo_ativacao > timestamp) {
                     estado_atual[indice].tempo_ativacao = timestamp;
                     prox_estado[indice].tempo_ativacao = timestamp;
                 }
@@ -220,7 +222,7 @@ int main(int argc, char* argv[]) {
 
     fclose(fp); // fim da leitura
 
-    celulas_intactas = celulas_combustiveis_inicial;
+    celulas_intactas = celulas_combustiveis_inicial - celulas_em_chamas;
     int tempo_atual = 0;
 
     double tempo_inicial = omp_get_wtime();
@@ -230,11 +232,14 @@ int main(int argc, char* argv[]) {
             for(int j = 0; j < COLUNA; j++) {
                 int indice = (i * COLUNA) + j;
 
+                prox_estado[indice].es = estado_atual[indice].es;
+                prox_estado[indice].tq = estado_atual[indice].tq;
+
                 // Ativar as zonas
                 if (estado_atual[indice].tempo_ativacao == tempo_atual && estado_atual[indice].es == INTACTA) {
                     celulas_intactas--;
                     celulas_de_contencao++;
-                    estado_atual[indice].es = CONTENCAO;
+                    prox_estado[indice].es = CONTENCAO;
                 } else if (estado_atual[indice].es == INTACTA) { // Prox estado
                     int peso_total = 0;
                     for(int k = 0; k < 8; k++) {
@@ -255,6 +260,7 @@ int main(int argc, char* argv[]) {
                     int potencial = (peso_total * estado_atual[indice].fator * (100 - estado_atual[indice].umidade))/(100);
                     if (potencial >= LIMIAR) {
                         prox_estado[indice].es = EM_CHAMAS;
+                        prox_estado[indice].tq = estado_atual[indice].cb == VEGETACAO_RASTEIRA ? TEMPO_VEGETACAO : TEMPO_FLORESTA;
                         celulas_em_chamas++;
                         celulas_intactas--;
                         total_ignicoes++;
@@ -276,18 +282,21 @@ int main(int argc, char* argv[]) {
             qnt_ignicoes_passo_maior = qnt_ignicoes;
             passo_com_maior_numero_de_ignicoes = tempo_atual;
         }
-        for(int i = 0; i < LINHA; i++) {
-            for(int j = 0; j < COLUNA; j++) {
-                int indice = (i * COLUNA) + j;
-                estado_atual[indice] = prox_estado[indice];
-            }
-        }
+        celula *aux = estado_atual;
+        estado_atual = prox_estado;
+        prox_estado = aux;
         tempo_atual++;
     }
     double tempo_final = omp_get_wtime();
 
-    percentual_queimado = 100 * ((celulas_queimadas + celulas_em_chamas)/(float)celulas_combustiveis_inicial);
-    percentual_protegido = 100 * (celulas_de_contencao/(float)celulas_combustiveis_inicial);
+    if (celulas_combustiveis_inicial == 0) {
+        percentual_queimado = 0.0;
+        percentual_protegido = 0.0;
+    }
+    else {
+        percentual_queimado = 100 * ((celulas_queimadas + celulas_em_chamas)/(double)celulas_combustiveis_inicial);
+        percentual_protegido = 100 * (celulas_de_contencao/(double)celulas_combustiveis_inicial);
+    }
 
     unsigned long long checksum = 0;
     for(long long i = 0; i < LINHA*COLUNA; i++) { // Vou mudar todos os for para isso, que loucura boa/ tem que verificar se eh melhor pro omp, mas acho que sim
@@ -295,9 +304,10 @@ int main(int argc, char* argv[]) {
         checksum = checksum * 31ULL + (unsigned long long)estado_atual[i].tq;
     }
 
-    printf("passos: %d\nnao_combustiveis: %d\nintactas: %d\nem_chamas: %d\nqueimadas: %d\ncontencao: %d\ntotal_ignicoes: %d\npico_ignicoes: %d\npercentual_queimado:\
- %d\npercentual_protegido: %d\nchecksum: %llu\ntempo: %f", tempo_atual, celulas_n_combustiveis, celulas_intactas, celulas_em_chamas, celulas_queimadas,\
-              celulas_de_contencao, total_ignicoes, qnt_ignicoes_passo_maior, percentual_queimado, percentual_protegido, checksum, tempo_final - tempo_inicial);
+    printf("passos: %d\nnao_combustiveis: %d\nintactas: %d\nem_chamas: %d\nqueimadas: %d\ncontencao: %d\ntotal_ignicoes: %d\npico_ignicoes: %d %d\npercentual_queimado:\
+ %.2f\npercentual_protegido: %.2f\nchecksum: %llu\ntempo: %f", tempo_atual, celulas_n_combustiveis, celulas_intactas, celulas_em_chamas, celulas_queimadas,\
+              celulas_de_contencao, total_ignicoes, passo_com_maior_numero_de_ignicoes, qnt_ignicoes_passo_maior, percentual_queimado,  percentual_protegido, checksum, \
+              tempo_final - tempo_inicial);
 
     free(estado_atual);
     free(prox_estado);
