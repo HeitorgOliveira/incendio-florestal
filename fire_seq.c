@@ -4,6 +4,21 @@
 #include <semaphore.h>
 #include <omp.h>
 
+#define AGUA 0
+#define SOLO_EXPOSTO 0
+#define VEGETACAO 8
+#define FLORESTA 12
+
+// ------------------------- STRUCTS -------------------------
+
+
+// Vento
+typedef struct {
+    int linha;
+    int coluna;
+    float intensidade;
+} vento;
+
 // Define ponto como o par de inteiros x e y
 typedef struct {
     int x;
@@ -18,8 +33,64 @@ typedef struct {
     ponto p2;
 } zona_contencao;
 
+// ------------------------- Funções -------------------------
 
-int main(void){
+// Função para retornar a direção do vento dado um par ordenado (linha x coluna):
+char *direcao_vento(int linha, int coluna) {
+    switch(linha * 10 + coluna) {
+        case -10 + 0: return "Norte";
+        case -10 + 1: return "Nordeste";
+        case 0 + 1: return "Leste";
+        case 10 + 1: return "Sudeste";
+        case 10 + 0: return "Sul";
+        case 10 -1: return "Sudoeste";
+        case 0 - 1: return "Oeste";
+        case -10 - 1: return "Noroeste";
+        default: return "Invalido";
+    }
+}
+
+int resgata_codigo(unsigned int *seed) {
+    int valor = rand_r(seed) % 100;
+    if (valor >= 0 && valor <= 9) return 0;
+    if (valor >=10 && valor <= 19) return 1;
+    if (valor >= 20 && valor <= 54) return 2;
+    if (valor >= 55 && valor <= 99) return 3;
+    return -1;
+}
+
+void geracao_cobertura(unsigned int seed, int linhas, int colunas, int **matriz) {
+    for (int i = 0; i < linhas; i++) {
+        for (int j = 0; j < colunas; j++) {
+            // Geração de cobertura com base na semente
+            int codigo = resgata_codigo(&seed);
+            matriz[i][j] = codigo;
+        }
+    }
+}
+
+void exibe_matriz(int linhas, int colunas, int **matriz) {
+    for (int i = 0; i < linhas; i ++) {
+        for (int j = 0; j < colunas; j++) {
+            printf("%d ", matriz[i][j]);
+        }
+        printf("\n");
+    }
+}
+
+int main(int argc, char *argv[]){
+    // Verificar se os argumentos estão corretos:
+    if (argc != 2) {
+        printf("Uso: %s <arquivo.txt>\n", argv[0]);
+        exit(1);
+    }
+
+    FILE *arquivo = fopen(argv[1], "r");
+    if (!arquivo) {
+        printf("Erro ao abrir o arquivo: %s\n", argv[1]);
+        exit(1);
+    }
+
     // Declaração de variáveis
     int matriz_linhas, matriz_colunas;
     int passos;
@@ -29,9 +100,7 @@ int main(void){
     int vento_linha, vento_coluna;
     int intensidade_vento;
     int n_focos_iniciais, n_zonas_contencao;
-
     
-
     // Leitura e debug dos dados, os parênteses exibem o nome das variáveis no PDF:
     // matriz_linhas (L)
     // matriz_colunas (C)
@@ -39,22 +108,35 @@ int main(void){
     // n_threads (T)
     // seed
     // limiar_ignicao (LIMIAR)
-    scanf("%d %d %d %d %d %d", &matriz_linhas, &matriz_colunas, &passos, &n_threads, &seed, &limiar_ignicao);
+    fscanf(arquivo, "%d %d %d %d %d %d", &matriz_linhas, &matriz_colunas, &passos, &n_threads, &seed, &limiar_ignicao);
     printf("Os dados lidos foram: matriz_linhas: %d, matriz_colunas: %d, passos: %d, n_threads: %d, seed: %d, limiar_ignicao: %d\n", matriz_linhas, matriz_colunas, passos, n_threads, seed, limiar_ignicao);
-    
+
     // Verificação de não negatividade. Caso tenha algum valor invalido, retorna imediatamente
     if (matriz_linhas <= 0 || matriz_colunas <= 0 || passos < 0 || n_threads <= 0 || limiar_ignicao < 0){
         printf("Dados inválidos para algum dos valores fornecidos\n");
         exit(1);
     }
 
+    int **matriz = malloc(sizeof(int *) * matriz_linhas);
+    if (matriz == NULL) {
+        printf("Erro ao alocar memória para a matriz\n");
+        exit(1);
+    }
+    for (int i = 0; i < matriz_linhas; i++) {
+        matriz[i] = malloc(sizeof(int) * matriz_colunas);
+        if (matriz[i] == NULL) {
+            printf("Erro ao alocar memória para a linha %d\n", i);
+            exit(1);
+        }
+    }
+
     // Leitura da configuração do vento.
     // vento_linha
     // vento_coluna
     // vento_intensidade
-    scanf("%d %d %d", &vento_linha, &vento_coluna, &intensidade_vento);
+    fscanf(arquivo, "%d %d %d", &vento_linha, &vento_coluna, &intensidade_vento);
     printf("Os dados lidos foram: vento_linha: %d, vento_coluna: %d, intensidade_vento: %d\n", vento_linha, vento_coluna, intensidade_vento);
-    
+
     // Verifica se os valores lidos estão no intervalo correto.
     if (vento_linha < -1 || vento_linha > 1 || vento_coluna < -1 || vento_coluna > 1 || (vento_coluna == 0 && vento_linha == 0) || intensidade_vento < 0 || intensidade_vento > 5){
         printf("Valores inválidos para a configuração do vento\n");
@@ -64,7 +146,7 @@ int main(void){
     // Leitura da quantidade de focos iniciais e zonas de contenção.
     // n_focos_iniciais
     // n_zonas_contencao
-    scanf("%d %d",&n_focos_iniciais, &n_zonas_contencao);
+    fscanf(arquivo, "%d %d", &n_focos_iniciais, &n_zonas_contencao);
     printf("Os dados lidos foram: focos_iniciais: %d, n_zonas_contencao: %d\n", n_focos_iniciais, n_zonas_contencao);
 
     // Verifica se os valores são validos.
@@ -85,7 +167,7 @@ int main(void){
         // Adicionar os focos iniciais de incêndio.
 
         // Verifica se os valores são números.
-        if (scanf("%d %d", &focos_iniciais[i].y, &focos_iniciais[i].x) != 2) {
+        if (fscanf(arquivo, "%d %d", &focos_iniciais[i].y, &focos_iniciais[i].x) != 2) {
             printf("Erro na leitura das coordenadas\n");
             free(focos_iniciais);
             exit(1);
@@ -110,7 +192,7 @@ int main(void){
     // Adiciona as zonas iniciais de contenção
     for (int i = 0; i < n_zonas_contencao; i++) {
         // Adicionar zonas de contenção
-        if (scanf("%d %d %d %d %d", &zonas_contencao[i].tempo_construcao, &zonas_contencao[i].p1.y, &zonas_contencao[i].p1.x, &zonas_contencao[i].p2.y, &zonas_contencao[i].p2.x) != 5) {
+        if (fscanf(arquivo, "%d %d %d %d %d", &zonas_contencao[i].tempo_construcao, &zonas_contencao[i].p1.y, &zonas_contencao[i].p1.x, &zonas_contencao[i].p2.y, &zonas_contencao[i].p2.x) != 5) {
             printf("Erro na leitura das coordenadas\n");
             free(focos_iniciais);
             free(zonas_contencao);
@@ -135,4 +217,13 @@ int main(void){
     for (int i = 0; i < n_zonas_contencao; i++) {
         printf("Zona %d: Tempo de construção: %d, P1: (%d, %d), P2: (%d, %d)\n", i + 1, zonas_contencao[i].tempo_construcao, zonas_contencao[i].p1.x, zonas_contencao[i].p1.y, zonas_contencao[i].p2.x, zonas_contencao[i].p2.y);
     }
+
+    geracao_cobertura(seed, matriz_linhas, matriz_colunas, matriz);
+    exibe_matriz(matriz_linhas, matriz_colunas, matriz);
+
+    fclose(arquivo);
+    for (int i = 0; i < matriz_linhas; i++) {
+        free(matriz[i]);
+    }
+    free(matriz);
 }
