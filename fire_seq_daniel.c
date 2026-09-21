@@ -32,9 +32,10 @@ tempo_queima *tempos_queima_prox;
 int *tempos_ativacao;
 
 // constantes
-int LINHA, COLUNA, PASSOS, THREADS, SEED, LIMIAR;
+int LINHA, COLUNA, PASSOS, THREADS, LIMIAR;
 int VENTO_LINHA, VENTO_COLUNA, INTENSIDADE;
 int N_FOCOS, N_ZONAS;
+unsigned int SEED;
 
 const int DIRS[8][3] = { // direções de vento com os respectivos pesos (7 == diagonal, 10 == ortogonal)
             {1, 0, 10},
@@ -50,7 +51,7 @@ const int DIRS[8][3] = { // direções de vento com os respectivos pesos (7 == d
 // métricas gerais variáveis
 int celulas_n_combustiveis = 0, celulas_combustiveis_inicial = 0;
 int celulas_intactas = 0, celulas_em_chamas = 0, celulas_queimadas = 0, celulas_de_contencao = 0;
-int total_ignicoes = 0, passo_com_maior_numero_de_ignicoes = -1, qnt_ignicoes_passo_maior = 0, celulas_combustiveis_inicial = 0;
+int total_ignicoes = 0, passo_com_maior_numero_de_ignicoes = -1, qnt_ignicoes_passo_maior = 0;
 double percentual_queimado = 0, percentual_protegido = 0;
 
 short int aberturaArquivo(FILE **fp, char* nomeArquivo) {
@@ -77,14 +78,14 @@ void iniciar_matrizes() {
                 case VEGETACAO_RASTEIRA:
                     fatores[indice] = FATOR_VEGETACAO;
                     estados_atuais[indice] = INTACTA;
-                    tempos_queima_atuais[indice] = TEMPO_VEGETACAO;
+                    tempos_queima_atuais[indice] = TEMPO_NULO;
                     celulas_combustiveis_inicial++;
                     break;
 
                 case FLORESTA:
                     fatores[indice] = FATOR_FLORESTA;
                     estados_atuais[indice] = INTACTA;
-                    tempos_queima_atuais[indice] = TEMPO_FLORESTA;
+                    tempos_queima_atuais[indice] = TEMPO_NULO;
                     celulas_combustiveis_inicial++;
                     break;
 
@@ -110,7 +111,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    fscanf(fp, " %d %d %d %d %d %d", &LINHA, &COLUNA, &PASSOS, &THREADS, &SEED, &LIMIAR);
+    fscanf(fp, " %d %d %d %d %u %d", &LINHA, &COLUNA, &PASSOS, &THREADS, &SEED, &LIMIAR);
     if (!(verifica_gt_0(LINHA) && verifica_gt_0(COLUNA) && verifica_gte_0(PASSOS) && verifica_gt_0(THREADS) && verifica_gt_0(LIMIAR))) {
         fprintf(stderr, "Os parâmetros do header estão inválidos\n");
         return 1;
@@ -159,6 +160,7 @@ int main(int argc, char* argv[]) {
         }
         
         estados_atuais[indice] = EM_CHAMAS;
+        tempos_queima_atuais[indice] = (fatores[indice] == FATOR_VEGETACAO) ? TEMPO_VEGETACAO : TEMPO_FLORESTA;
         celulas_em_chamas++;
     }
     
@@ -219,21 +221,14 @@ int main(int argc, char* argv[]) {
             for(int j = 0; j < COLUNA; j++) {
                 int indice = (i * COLUNA) + j;
 
+                estados_prox[indice] = estados_atuais[indice];
+                tempos_queima_prox[indice] = tempos_queima_atuais[indice];
+
                 // caso a célula deva ativar no passo atual e ainda não tenha sido atingida, se torna de contenção
                 if (tempos_ativacao[indice] == passo_atual && estados_atuais[indice] == INTACTA) {
                     estados_prox[indice] = CONTENCAO;
                     celulas_de_contencao++;
                     celulas_intactas--;
-                }
-                
-                // caso em chamas, decrementa o tempo de queima ou considera queimado
-                else if (estados_atuais[indice] == EM_CHAMAS) {
-                    tempos_queima_prox[indice] = tempos_queima_atuais[indice] - 1;
-                    if (tempos_queima_atuais[indice] <= 0) {
-                        estados_prox[indice] = QUEIMADA;
-                        celulas_queimadas++;
-                        celulas_em_chamas--;
-                    }
                 }
 
                 // caso intacta, verifica se deve entrar em chamas
@@ -260,7 +255,7 @@ int main(int argc, char* argv[]) {
                     // caso passe do limiar, deve queimar
                     if (potencial_ignicao >= LIMIAR) { 
                         estados_prox[indice] = EM_CHAMAS;
-                        tempos_queima_prox[indice] = estados_atuais[indice] == VEGETACAO_RASTEIRA ? TEMPO_VEGETACAO : TEMPO_FLORESTA;
+                        tempos_queima_prox[indice] = (fatores[indice] == FATOR_VEGETACAO) ? TEMPO_VEGETACAO : TEMPO_FLORESTA;
                         celulas_em_chamas++;
                         celulas_intactas--;
                         total_ignicoes++;
@@ -295,6 +290,8 @@ int main(int argc, char* argv[]) {
         tempo_queima *aux_tempos = tempos_queima_atuais;
         tempos_queima_atuais = tempos_queima_prox;
         tempos_queima_prox = aux_tempos;
+
+        passo_atual++;
     }
 
     double tempo_final = omp_get_wtime();
@@ -314,11 +311,22 @@ int main(int argc, char* argv[]) {
         checksum = checksum * 31ULL + (unsigned long long)tempos_queima_atuais[i];
     }
 
-    printf("passos: %d\nnao_combustiveis: %d\nintactas: %d\nem_chamas: %d\nqueimadas: %d\ncontencao: %d\ntotal_ignicoes: \
-           %d\npico_ignicoes: %d %d\npercentual_queimado: %.2f\npercentual_protegido: %.2f\nchecksum: %llu\ntempo: %f", \ 
-           passo_atual, celulas_n_combustiveis, celulas_intactas, celulas_em_chamas, celulas_queimadas, \
-           celulas_de_contencao, total_ignicoes, passo_com_maior_numero_de_ignicoes, qnt_ignicoes_passo_maior, \
-           percentual_queimado,  percentual_protegido, checksum, tempo_final - tempo_inicial);
+    printf("passos: %d\n"
+       "nao_combustiveis: %d\n"
+       "intactas: %d\n"
+       "em_chamas: %d\n"
+       "queimadas: %d\n"
+       "contencao: %d\n"
+       "total_ignicoes: %d\n"
+       "pico_ignicoes: %d %d\n"
+       "percentual_queimado: %.2f\n"
+       "percentual_protegido: %.2f\n"
+       "checksum: %llu\n"
+       "tempo: %f\n",
+       passo_atual, celulas_n_combustiveis, celulas_intactas, celulas_em_chamas,
+       celulas_queimadas, celulas_de_contencao, total_ignicoes,
+       passo_com_maior_numero_de_ignicoes, qnt_ignicoes_passo_maior,
+       percentual_queimado, percentual_protegido, checksum, tempo_final - tempo_inicial);
 
     free(estados_atuais);
     free(estados_prox);
