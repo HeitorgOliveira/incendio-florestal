@@ -18,7 +18,7 @@ typedef enum estado { NAO_COMBUSTIVEL, INTACTA, EM_CHAMAS, QUEIMADA, CONTENCAO }
 typedef enum tempo_queima { TEMPO_NULO = 0, TEMPO_VEGETACAO = 2, TEMPO_FLORESTA = 4 } tempo_queima;
 typedef enum fator_queima { FATOR_NULO = 0, FATOR_VEGETACAO = 8, FATOR_FLORESTA = 12 } fator_queima;
 
-/* arrays de atributos */
+/* arrays de atributos, com borda sentinela: dimensão (LINHA+2) x (COLUNA+2) */
 estado *estados_atuais;
 estado *estados_prox;
 int *umidades;
@@ -34,7 +34,7 @@ int VENTO_LINHA, VENTO_COLUNA, INTENSIDADE;
 int N_FOCOS, N_ZONAS;
 unsigned int SEED;
 
-const int DIRS[8][3] = { // direções de vento com os respectivos pesos (7 == diagonal, 10 == ortogonal)
+const int DIRS[8][3] = {
             {1, 0, 10},
             {0, 1, 10},
             {1, 1, 7},
@@ -63,12 +63,13 @@ cobertura avaliar_valor(int v) {
     return FLORESTA;
 }
 
+// geração da cobertura é inerentemente sequencial (rand_r encadeado célula a célula
+// na ordem exigida pelo enunciado), então não é paralelizada
 void iniciar_matrizes() {
     for (int i = 0; i < LINHA + 2; i++) {
         for (int j = 0; j < COLUNA + 2; j++) {
             int indice = (i * BORDA) + j;
 
-            // célula de borda criada para evitar verificações de limites
             if (i == 0 || j == 0 || i == LINHA + 1 || j == COLUNA + 1) {
                 estados_atuais[indice] = NAO_COMBUSTIVEL;
                 estados_prox[indice] = NAO_COMBUSTIVEL;
@@ -215,83 +216,114 @@ int main(int argc, char* argv[]) {
 
     celulas_intactas = celulas_combustiveis_inicial - celulas_em_chamas;
     int passo_atual = 0;
+    int ignicoes_no_passo = 0;
+    int continuar = true;
+
+    omp_set_dynamic(0);
     double tempo_inicial = omp_get_wtime();
 
-    // loop principal de simulação
-    while (passo_atual < PASSOS && celulas_em_chamas > 0) {
-        int ignicoes_no_passo = 0;
+    #pragma omp parallel num_threads(THREADS) default(none) \
+        shared(estados_atuais, estados_prox, umidades, fatores, \
+               tempos_queima_atuais, tempos_queima_prox, tempos_ativacao, \
+               passo_atual, ignicoes_no_passo, continuar, \
+               celulas_intactas, celulas_em_chamas, celulas_queimadas, celulas_de_contencao, \
+               total_ignicoes, qnt_ignicoes_passo_maior, passo_com_maior_numero_de_ignicoes, \
+               PASSOS, LINHA, COLUNA, BORDA, VENTO_LINHA, VENTO_COLUNA, INTENSIDADE, LIMIAR)
+    {
+        while (true) {
+            #pragma omp single
+            {
+                continuar = (passo_atual < PASSOS && celulas_em_chamas > 0);
+                ignicoes_no_passo = 0;
+            }
 
-        // passa por todas as células
-        for (int i = 0; i < LINHA; i++) {
-            for (int j = 0; j < COLUNA; j++) {
-                int indice = ((i + 1) * BORDA) + (j + 1);
+            if (!continuar) break;
 
-                estados_prox[indice] = estados_atuais[indice];
-                tempos_queima_prox[indice] = tempos_queima_atuais[indice];
-
-                // caso a célula deva ativar no passo atual e ainda não tenha sido atingida, se torna de contenção
-                if (tempos_ativacao[indice] == passo_atual && estados_atuais[indice] == INTACTA) {
-                    estados_prox[indice] = CONTENCAO;
-                    celulas_de_contencao++;
-                    celulas_intactas--;
-                }
-
-                // caso intacta, verifica se deve entrar em chamas
-                else if (estados_atuais[indice] == INTACTA) {
-                    // calcula o peso com base nos vizinhos
-                    int peso_total = 0; // 𝑆 = ∑ 𝑃𝑣
-                    for (int k = 0; k < 8; k++) {
-                        int i_vizinho = i + 1 + DIRS[k][0];
-                        int j_vizinho = j + 1 + DIRS[k][1];
-                        int indice_vizinho = (i_vizinho * BORDA) + j_vizinho;
-
-                        // graças à borda, o vizinho sempre existe; se for célula fantasma, é NAO_COMBUSTIVEL e o bool abaixo é false
-                        int em_chamas = (estados_atuais[indice_vizinho] == EM_CHAMAS);
-
-                        int alinhamento_vento = (VENTO_LINHA * (-DIRS[k][0])) + (VENTO_COLUNA * (-DIRS[k][1]));
-                        int peso_vizinho = DIRS[k][2] + (INTENSIDADE * alinhamento_vento); // 𝑃𝑣
-                        peso_total += (peso_vizinho > 1 ? peso_vizinho : 1) * em_chamas;
-                    }
-
-                    int potencial_ignicao = (peso_total * fatores[indice] * (100 - umidades[indice])) / 100;
-
-                    // caso passe do limiar, deve queimar
-                    if (potencial_ignicao >= LIMIAR) {
-                        estados_prox[indice] = EM_CHAMAS;
-                        tempos_queima_prox[indice] = (fatores[indice] == FATOR_VEGETACAO) ? TEMPO_VEGETACAO : TEMPO_FLORESTA;
-                        celulas_em_chamas++;
+            // ativação das zonas
+            #pragma omp for collapse(2) schedule(static) \
+                reduction(+: celulas_intactas, celulas_de_contencao)
+            for (int i = 0; i < LINHA; i++) {
+                for (int j = 0; j < COLUNA; j++) {
+                    int indice = ((i + 1) * BORDA) + (j + 1);
+                    if (tempos_ativacao[indice] == passo_atual && estados_atuais[indice] == INTACTA) {
+                        estados_prox[indice] = CONTENCAO;
+                        celulas_de_contencao++;
                         celulas_intactas--;
-                        total_ignicoes++;
-                        ignicoes_no_passo++;
-                    }
-                }
-
-                // caso em chamas, decrementa o tempo em queima (e verifica se queimou totalmente)
-                else if (estados_atuais[indice] == EM_CHAMAS) {
-                    tempos_queima_prox[indice] = tempos_queima_atuais[indice] - 1;
-                    if (tempos_queima_prox[indice] == 0) {
-                        estados_prox[indice] = QUEIMADA;
-                        celulas_em_chamas--;
-                        celulas_queimadas++;
                     }
                 }
             }
+
+            // cálculo do próximo estado
+            #pragma omp for collapse(2) schedule(static) \
+                reduction(+: celulas_intactas, celulas_em_chamas, celulas_queimadas, \
+                             total_ignicoes, ignicoes_no_passo)
+            for (int i = 0; i < LINHA; i++) {
+                for (int j = 0; j < COLUNA; j++) {
+                    int indice = ((i + 1) * BORDA) + (j + 1);
+
+                    // célula já resolvida como CONTENCAO no laço anterior
+                    if (tempos_ativacao[indice] == passo_atual && estados_atuais[indice] == INTACTA) {
+                        continue;
+                    }
+
+                    estados_prox[indice] = estados_atuais[indice];
+                    tempos_queima_prox[indice] = tempos_queima_atuais[indice];
+
+                    if (estados_atuais[indice] == INTACTA) {
+                        int peso_total = 0;
+                        #pragma omp simd reduction(+: peso_total)
+                        for (int k = 0; k < 8; k++) {
+                            int i_vizinho = i + 1 + DIRS[k][0];
+                            int j_vizinho = j + 1 + DIRS[k][1];
+                            int indice_vizinho = (i_vizinho * BORDA) + j_vizinho;
+
+                            int em_chamas = (estados_atuais[indice_vizinho] == EM_CHAMAS);
+
+                            int alinhamento_vento = (VENTO_LINHA * (-DIRS[k][0])) + (VENTO_COLUNA * (-DIRS[k][1]));
+                            int peso_vizinho = DIRS[k][2] + (INTENSIDADE * alinhamento_vento);
+                            peso_total += (peso_vizinho > 1 ? peso_vizinho : 1) * em_chamas;
+                        }
+
+                        int potencial_ignicao = (peso_total * fatores[indice] * (100 - umidades[indice])) / 100;
+
+                        if (potencial_ignicao >= LIMIAR) {
+                            estados_prox[indice] = EM_CHAMAS;
+                            tempos_queima_prox[indice] = (fatores[indice] == FATOR_VEGETACAO) ? TEMPO_VEGETACAO : TEMPO_FLORESTA;
+                            celulas_em_chamas++;
+                            celulas_intactas--;
+                            total_ignicoes++;
+                            ignicoes_no_passo++;
+                        }
+                    }
+                    else if (estados_atuais[indice] == EM_CHAMAS) {
+                        tempos_queima_prox[indice] = tempos_queima_atuais[indice] - 1;
+                        if (tempos_queima_prox[indice] == 0) {
+                            estados_prox[indice] = QUEIMADA;
+                            celulas_em_chamas--;
+                            celulas_queimadas++;
+                        }
+                    }
+                }
+            }
+
+            #pragma omp single
+            {
+                if (ignicoes_no_passo > qnt_ignicoes_passo_maior) {
+                    qnt_ignicoes_passo_maior = ignicoes_no_passo;
+                    passo_com_maior_numero_de_ignicoes = passo_atual;
+                }
+
+                estado *aux_estados = estados_atuais;
+                estados_atuais = estados_prox;
+                estados_prox = aux_estados;
+
+                tempo_queima *aux_tempos = tempos_queima_atuais;
+                tempos_queima_atuais = tempos_queima_prox;
+                tempos_queima_prox = aux_tempos;
+
+                passo_atual++;
+            }
         }
-
-        if (ignicoes_no_passo > qnt_ignicoes_passo_maior) {
-            qnt_ignicoes_passo_maior = ignicoes_no_passo;
-            passo_com_maior_numero_de_ignicoes = passo_atual;
-        }
-
-        estado *aux_estados = estados_atuais;
-        estados_atuais = estados_prox;
-        estados_prox = aux_estados;
-
-        tempo_queima *aux_tempos = tempos_queima_atuais;
-        tempos_queima_atuais = tempos_queima_prox;
-        tempos_queima_prox = aux_tempos;
-
-        passo_atual++;
     }
 
     double tempo_final = omp_get_wtime();
