@@ -65,6 +65,7 @@ typedef struct celula {
 // VARIAVEIS
 unsigned int SEED;
 int LINHA, COLUNA, PASSOS, THREADS, LIMIAR; // HEADER; threads eh util nessa versão
+int BORDA;
 int VENTO_LINHA, VENTO_COLUNA, INTENSIDADE;// VENTO; 
 int N_FOCOS, N_ZONAS;
 
@@ -89,32 +90,58 @@ cobertura avaliar_valor(int v) {
     return FLORESTA;
 }
 
-void iniciar_matrizes(celula **matriz) {
-    for(int i = 0; i < LINHA; i++) {
-        for(int j = 0; j < COLUNA; j++) {
-            int indice = (i * COLUNA) + j;
+void iniciar_matrizes(celula **matriz, celula **prox) {
+    for(int i = 0; i < LINHA+2; i++) {
+        for(int j = 0; j < COLUNA+2; j++) {
+            int indice = (i * BORDA) + j;
+            if (i == 0 || j == 0 || i == LINHA+1 || j == COLUNA+1){
+                (*matriz)[indice].es = NAO_COMBUSTIVEL;
+                (*prox)[indice].es = NAO_COMBUSTIVEL;
+                continue;
+            }
 
-            (*matriz)[indice].cb = avaliar_valor(rand_r(&SEED) % 100);
-            (*matriz)[indice].umidade = rand_r(&SEED) % 101;
+            cobertura c = avaliar_valor(rand_r(&SEED) % 100);
+            int um = rand_r(&SEED) % 101;
+            (*matriz)[indice].cb = c;
+            (*prox)[indice].cb = c;
+
+            (*matriz)[indice].umidade = um;
+            (*prox)[indice].umidade = um;
+
             (*matriz)[indice].tempo_ativacao = -1;
+            (*prox)[indice].tempo_ativacao = -1;
+
             (*matriz)[indice].tq = TEMPO_NULO;
+            (*prox)[indice].tq = TEMPO_NULO;
 
             switch ((*matriz)[indice].cb) {
                 case VEGETACAO_RASTEIRA:
                     (*matriz)[indice].fator = FATOR_VEGETACAO;
                     (*matriz)[indice].es = INTACTA;
+
+                    (*prox)[indice].fator = FATOR_VEGETACAO;
+                    (*prox)[indice].es = INTACTA;
+
                     celulas_combustiveis_inicial++;
                     break;
 
                 case FLORESTA:
                     (*matriz)[indice].fator = FATOR_FLORESTA;
                     (*matriz)[indice].es = INTACTA;
+
+                    (*prox)[indice].fator = FATOR_FLORESTA;
+                    (*prox)[indice].es = INTACTA;
+
                     celulas_combustiveis_inicial++;
                     break;
 
                 default:
                     (*matriz)[indice].fator = FATOR_NULO;
                     (*matriz)[indice].es = NAO_COMBUSTIVEL;
+
+                    (*prox)[indice].fator = FATOR_NULO;
+                    (*prox)[indice].es = NAO_COMBUSTIVEL;
+
                     celulas_n_combustiveis++;
             }
         }
@@ -155,16 +182,11 @@ int main(int argc, char* argv[]) {
     }
 
     // Criacao das matrizes
-    estado_atual = malloc(sizeof(celula) * LINHA * COLUNA);
-    prox_estado = malloc(sizeof(celula) * LINHA * COLUNA);
+    BORDA = COLUNA + 2;
+    estado_atual = malloc(sizeof(celula) * (LINHA+2) * BORDA);
+    prox_estado = malloc(sizeof(celula) * (LINHA+2) * BORDA);
 
-    iniciar_matrizes(&estado_atual); // Talvez passar isso aqui para depois da leitura dos focos e zonas para fechar o arquivo mais cedo?
-    for(int i = 0; i < LINHA; i++) {
-        for(int j = 0; j < COLUNA; j++) {
-            int indice = (i * COLUNA) + j;
-            prox_estado[indice] = estado_atual[indice];
-        }
-    }
+    iniciar_matrizes(&estado_atual, &prox_estado); // Talvez passar isso aqui para depois da leitura dos focos e zonas para fechar o arquivo mais cedo?
 
     // Focos iniciais 
     
@@ -175,7 +197,7 @@ int main(int argc, char* argv[]) {
             fprintf(stderr, "O foco está localizado fora da matriz.");
             return 1;
         }
-        int indice = (linhaF * COLUNA) + colunaF;
+        int indice = ((linhaF + 1) * BORDA) + (colunaF+1);
         if (estado_atual[indice].es == NAO_COMBUSTIVEL) {
             fprintf(stderr, "O foco está localizado em um célula não combustível");
             return 1;
@@ -209,7 +231,7 @@ int main(int argc, char* argv[]) {
         }
         for(int i = linhaIZ; i <= linhaFZ; i++) {
             for(int j = colunaIZ; j <= colunaFZ; j++) {
-                int indice = (i * COLUNA) + j;
+                int indice = ((i+1) * BORDA) + (j+1);
                 if (estado_atual[indice].tempo_ativacao == -1 || estado_atual[indice].tempo_ativacao > timestamp) {
                     estado_atual[indice].tempo_ativacao = timestamp;
                     prox_estado[indice].tempo_ativacao = timestamp;
@@ -233,7 +255,7 @@ int main(int argc, char* argv[]) {
         shared(estado_atual, prox_estado, tempo_atual, qnt_ignicoes, continuar, \
                celulas_intactas, celulas_em_chamas, celulas_queimadas, \
                celulas_de_contencao, total_ignicoes, qnt_ignicoes_passo_maior, \
-               passo_com_maior_numero_de_ignicoes, PASSOS, LINHA, COLUNA, \
+               passo_com_maior_numero_de_ignicoes, PASSOS, LINHA, COLUNA, BORDA, \
                DIRS, VENTO_LINHA, VENTO_COLUNA, INTENSIDADE, LIMIAR)
     {
         while(true) {
@@ -250,7 +272,7 @@ int main(int argc, char* argv[]) {
             reduction(+:celulas_intactas, celulas_de_contencao) // trocar o static por dynamic para fazer as comparacoes lendarias
             for(int i = 0; i < LINHA; i++) {
                 for(int j = 0; j < COLUNA; j++) {
-                    int indice = (i * COLUNA) + j;
+                    int indice = ((i+1) * BORDA) + (j+1);
                     if (estado_atual[indice].tempo_ativacao == tempo_atual && estado_atual[indice].es == INTACTA) {
                         celulas_intactas--;
                         celulas_de_contencao++;
@@ -263,7 +285,7 @@ int main(int argc, char* argv[]) {
                 reduction(+:celulas_intactas, celulas_em_chamas, celulas_queimadas, total_ignicoes, qnt_ignicoes)
             for(int i = 0; i < LINHA; i++) {
                 for(int j = 0; j < COLUNA; j++) {
-                    int indice = (i * COLUNA) + j;
+                    int indice = ((i+1) * BORDA) + (j+1);
 
                     if (estado_atual[indice].tempo_ativacao == tempo_atual && estado_atual[indice].es == INTACTA) {
                         continue;
@@ -274,17 +296,17 @@ int main(int argc, char* argv[]) {
                         int peso_total = 0;
                         #pragma omp simd reduction(+:peso_total)
                         for(int k = 0; k < 8; k++) {
-                            int iatual = i, jatual = j;
+                            int iatual = i + 1, jatual = j + 1;
 
                             iatual += DIRS[k][0];
                             jatual += DIRS[k][1];
-                            if (!(verifica_linha(iatual) && verifica_coluna(jatual))) continue;
-                            if (estado_atual[(iatual * COLUNA) + jatual].es != EM_CHAMAS) continue;
+
+                            int es_EM_CHAMAS = estado_atual[(iatual * BORDA) + jatual].es == EM_CHAMAS;
 
                             char alinhamento_vento = (VENTO_LINHA * (-DIRS[k][0])) + (VENTO_COLUNA * (-DIRS[k][1]));
 
                             int peso_vizinho = DIRS[k][2] + (INTENSIDADE * alinhamento_vento);
-                            peso_total += peso_vizinho > 1 ? peso_vizinho : 1;
+                            peso_total += (peso_vizinho > 1 ? peso_vizinho : 1) * es_EM_CHAMAS;
 
                         }
 
@@ -319,9 +341,9 @@ int main(int argc, char* argv[]) {
             }
 
             #pragma omp single
-            {
+            { // Da para usar simd aqui caso eu troque para copia de matrizes (ver se compensa)
                 celula *aux = estado_atual;
-                estado_atual = prox_estado;
+                estado_atual = prox_estado; 
                 prox_estado = aux;
                 tempo_atual++;
             }
@@ -340,9 +362,14 @@ int main(int argc, char* argv[]) {
     }
 
     unsigned long long checksum = 0;
-    for(long long i = 0; i < LINHA*COLUNA; i++) { // Vou mudar todos os for para isso, que loucura boa/ tem que verificar se eh melhor pro omp, mas acho que sim
-        checksum = checksum * 31ULL + (unsigned long long)estado_atual[i].es;
-        checksum = checksum * 31ULL + (unsigned long long)estado_atual[i].tq;
+    for(long long k = 0; k < LINHA*COLUNA; k++) { // Vou mudar todos os for para isso, que loucura boa/ tem que verificar se eh melhor pro omp, mas acho que sim
+
+        long long i = k / COLUNA;
+        long long j = k % COLUNA;
+        long long indice = ((i+1) * BORDA) + (j+1);
+
+        checksum = checksum * 31ULL + (unsigned long long)estado_atual[indice].es;
+        checksum = checksum * 31ULL + (unsigned long long)estado_atual[indice].tq;
     }
 
     printf("passos: %d\nnao_combustiveis: %d\nintactas: %d\nem_chamas: %d\nqueimadas: %d\ncontencao: %d\ntotal_ignicoes: %d\npico_ignicoes: %d %d\npercentual_queimado:\
